@@ -1,0 +1,5 @@
+{
+  "modulos": [
+    { "id": "focusview", "tipo": "vscode-setting", "alvos": ["*"], "chave": "claudeCode.focusView", "valor": true }
+  ]
+}

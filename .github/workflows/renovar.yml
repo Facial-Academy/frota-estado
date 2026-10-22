@@ -1,0 +1,34 @@
+name: Renovar o estado desejado
+# Assina o manifesto (fonte/modulos.json) e publica estado.json. Toda segunda-feira (renova a validade de 120 dias), a cada mudança em fonte/ ou ferramentas/, e sob demanda.
+# Não roda em pull_request: o segredo da chave de assinatura nunca chega a código de fork.
+on:
+  schedule:
+    - cron: '17 9 * * 1'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['fonte/**', 'ferramentas/**', 'renovar.cjs']
+concurrency:
+  group: renovar
+  cancel-in-progress: false
+permissions:
+  contents: write
+jobs:
+  renovar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Testes
+        run: node test-renovar.cjs
+      - name: Assinar e publicar
+        env:
+          FROTA_CHAVE_PRIVADA: ${{ secrets.FROTA_CHAVE_PRIVADA }}
+        run: node renovar.cjs
+      - name: Gravar estado.json
+        run: |
+          git config user.name 'frota-estado[bot]'
+          git config user.email 'frota-estado@users.noreply.github.com'
+          git add estado.json
+          git commit -m "estado: renovado em $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push
