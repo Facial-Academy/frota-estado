@@ -6,7 +6,7 @@ try {
   gerarChave(path.join(raiz, 'k'), '2026-10'); const pem = ler(path.join(raiz, 'k', 'privada.pem')), pub = path.join(raiz, 'k', 'chave-publica.json')
   const fonte = path.join(raiz, 'modulos.json'), saida = path.join(raiz, 'estado.json'), modulosReais = ler(path.join(__dirname, 'fonte', 'modulos.json')); fs.writeFileSync(fonte, modulosReais)
   const op = { fonte, saida, chave: pub }, t1 = new Date('2026-10-22T17:30:00Z')
-  const r = renovar(op, t1, pem); assert.deepEqual([r.serial, r.modulos], [202610221730, 1])
+  const r = renovar(op, t1, pem); assert.deepEqual([r.serial, r.modulos], [202610221730, JSON.parse(modulosReais).modulos.length])
   const aberto = abrirEnvelope(ler(saida), JSON.parse(ler(pub))); assert.equal(aberto.manifesto.serial, 202610221730); assert.equal(aberto.manifesto.expira, '2027-02-19T17:30:00.000Z')
   assert.throws(() => renovar(op, t1, pem), /não é maior/); assert.throws(() => renovar(op, new Date('2026-10-22T17:29:00Z'), pem), /não é maior/)
   assert.equal(renovar(op, new Date('2026-10-29T09:17:00Z'), pem).serial, 202610290917)

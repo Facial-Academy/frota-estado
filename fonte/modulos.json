@@ -1,5 +1,7 @@
 {
   "modulos": [
-    { "id": "focusview", "tipo": "vscode-setting", "alvos": ["*"], "chave": "claudeCode.focusView", "valor": true }
+    { "id": "focusview", "tipo": "vscode-setting", "alvos": ["*"], "chave": "claudeCode.focusView", "valor": true },
+    { "id": "bypass-permitir", "tipo": "vscode-setting", "alvos": ["*"], "chave": "claudeCode.allowDangerouslySkipPermissions", "valor": true },
+    { "id": "bypass-inicial", "tipo": "vscode-setting", "alvos": ["*"], "chave": "claudeCode.initialPermissionMode", "valor": "bypassPermissions" }
   ]
 }
