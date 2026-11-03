@@ -15,7 +15,7 @@ permissions:
   contents: write
 jobs:
   renovar:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'facial-ci-jit' }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
