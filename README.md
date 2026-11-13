@@ -4,8 +4,9 @@ Estado desejado **assinado** dos computadores do time do Grupo Facial. Este repo
 
 - `estado.json` — o manifesto vigente, dentro de um envelope assinado com Ed25519 (`{ chave, manifesto (base64), assinatura }`). É o único arquivo que as máquinas leem:
   `https://raw.githubusercontent.com/Facial-Academy/frota-estado/main/estado.json`
-- `fonte/modulos.json` — o que se quer em cada máquina. Hoje só o tipo `vscode-setting` (uma chave `claudeCode.*` do `settings.json` do VS Code, valor escalar). Editar este arquivo é a única forma de mudar a frota; o `renovar.yml` assina e publica sozinho.
-- `chave-publica.json` — a chave pública (id `2026-10`). A privada vive no cofre da empresa e no segredo `FROTA_CHAVE_PRIVADA` deste repositório.
+- `fonte/pacotes.json` (escrito por `quiosque/deploy/publicar-pacote-frota.mjs` do MCP-grupofacial; ninguém edita à mão) lista os pacotes de MCP já assinados; `pacotes/` guarda os arquivos (`pacote-frota-<sha8>.json.gz`, conteúdo PÚBLICO: só o que as máquinas usam). O `renovar.cjs` só copia essa lista para o manifesto: sem a chave dos pacotes ninguém consegue publicar um pacote que as máquinas aceitem, nem com controle deste repositório.
+- `fonte/modulos.json` é o que se quer em cada máquina. Hoje só o tipo `vscode-setting` (uma chave `claudeCode.*` do `settings.json` do VS Code, valor escalar). Editar este arquivo é a única forma de mudar a frota; o `renovar.yml` assina e publica sozinho.
+- `chave-publica.json` — as chaves públicas: `2026-10` (assina o manifesto; a privada vive no cofre da empresa e no segredo `FROTA_CHAVE_PRIVADA` deste repositório) e `pacote-2026-11` com `"uso": "pacote"` (assina SÓ os pacotes de MCP; a privada NÃO está neste repositório nem no CI: só no cofre da empresa, e quem publica um pacote a lê de lá).
 - `renovar.cjs` + `.github/workflows/renovar.yml` — monta o manifesto, assina e grava `estado.json`: toda segunda-feira (renova a validade de 120 dias), a cada mudança em `fonte/` e sob demanda. O `serial` é a data e hora UTC e só cresce.
 - `ferramentas/` — cópia exata do cliente e da ferramenta de assinatura de `Facial-Academy/MCP-grupofacial` (`quiosque/converge/`); `ORIGEM.md` guarda os sha256.
 

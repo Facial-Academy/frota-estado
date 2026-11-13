@@ -19,7 +19,7 @@ function gerarChave(pasta, id) {
 
 function assinar(arqManifesto, arqPrivada, id) {
   const bytes = Buffer.from(JSON.stringify(JSON.parse(fs.readFileSync(arqManifesto, 'utf8'))), 'utf8') // reserializa: o que se assina é exatamente o que vai no envelope
-  const problemas = validar(JSON.parse(bytes.toString('utf8')))
+  const problemas = validar(JSON.parse(bytes.toString('utf8')), true) // estrito: o operador nunca assina um pacote mal formado
   if (problemas.length) throw new Error(`manifesto inválido: ${problemas.slice(0, 5).join('; ')}`)
   const chave = crypto.createPrivateKey(fs.readFileSync(arqPrivada, 'utf8'))
   return { chave: id, manifesto: bytes.toString('base64'), assinatura: crypto.sign(null, bytes, chave).toString('base64') }

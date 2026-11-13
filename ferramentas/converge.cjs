@@ -5,18 +5,21 @@
 // Segurança (o que o cliente exige antes de tocar em qualquer coisa):
 //   • assinatura Ed25519 do manifesto por uma chave publicada em chave-publica.json (a hospedagem do arquivo não precisa ser confiável);
 //   • `serial` nunca diminui (rollback do manifesto é recusado) e `expira` no futuro (manifesto congelado é recusado);
-//   • módulos só dos tipos e chaves que ESTE cliente conhece (lista fixa abaixo): o manifesto não manda executar nada.
+//   • módulos só dos tipos e chaves que ESTE cliente conhece (lista fixa abaixo): o manifesto não manda executar comando nenhum.
+//   • `pacotes` (campo de topo, opcional; ver pacote-mcp.cjs): o ÚNICO jeito de o manifesto entregar código, e só o pacote de MCPs do frota-estado, preso ao sha256 assinado.
+//     Fica FORA de `modulos` de propósito: um tipo novo dentro de `modulos` faria todo cliente já instalado recusar o manifesto inteiro (tipo desconhecido) e parar de aplicar até receber o cliente novo.
 // Falha de rede, manifesto inválido ou expirado = a máquina fica como está (exit 0, registrado no log). Só erro ao aplicar sai com código ≠ 0.
 const fs = require('fs'), path = require('path'), os = require('os'), crypto = require('crypto')
 const { aplicarChave } = require('./jsonc-config.cjs')
 const Trava = require('./trava.cjs')
+const Pacote = require('./pacote-mcp.cjs')
 
 const LIMITE_BYTES = 256 * 1024, TIMEOUT_MS = 20000, VALIDADE_MAX_DIAS = 400, LOG_MAX = 256 * 1024, JITTER_MAX_S = 300
 const TIPOS = { 'vscode-setting': { chave: /^claudeCode\.[A-Za-z0-9.]{1,80}$/ } }
 const ID = /^[a-z0-9][a-z0-9-]{0,39}$/
 
 const ehEscalar = v => v === null || ['boolean', 'number', 'string'].includes(typeof v)
-function validar(m) { // devolve a lista de problemas (vazia = válido); a mensagem nunca repete o valor recebido
+function validar(m, estrito = false) { // devolve a lista de problemas (vazia = válido); a mensagem nunca repete o valor recebido. `estrito` (assinador do operador): confere também cada entrada de `pacotes`
   const p = [], obj = x => x && typeof x === 'object' && !Array.isArray(x)
   if (!obj(m)) return ['o manifesto não é um objeto']
   if (m.formato !== 1) p.push('formato desconhecido')
@@ -36,6 +39,10 @@ function validar(m) { // devolve a lista de problemas (vazia = válido); a mensa
     if (typeof mod.chave !== 'string' || !tipo.chave.test(mod.chave)) p.push(`${r}: chave fora da lista permitida`)
     if (!ehEscalar(mod.valor) || (typeof mod.valor === 'string' && mod.valor.length > 200) || (typeof mod.valor === 'number' && !Number.isFinite(mod.valor))) p.push(`${r}: valor inválido`)
   })
+  if (m.pacotes !== undefined) {
+    if (!Array.isArray(m.pacotes) || m.pacotes.length > 5) p.push('pacotes inválidos')
+    else if (estrito) { const ids = new Set(); m.pacotes.forEach((x, i) => { p.push(...Pacote.validar(x, `pacote ${i + 1}`)); if (x && typeof x.id === 'string') { if (ids.has(x.id)) p.push(`pacote ${i + 1}: id repetido`); ids.add(x.id) } }) } // o cliente confere cada entrada na hora de aplicar: uma entrada ruim recusa só ela, nunca os `modulos`
+  }
   return p
 }
 
@@ -43,7 +50,7 @@ function validar(m) { // devolve a lista de problemas (vazia = válido); a mensa
 function abrirEnvelope(texto, chaves) {
   let env; try { env = JSON.parse(texto) } catch (e) { return { erro: 'ENVELOPE-INVALIDO não é JSON' } }
   if (!env || typeof env.chave !== 'string' || typeof env.manifesto !== 'string' || typeof env.assinatura !== 'string') return { erro: 'ENVELOPE-INVALIDO campos ausentes' }
-  const k = (chaves.chaves || []).find(x => x && x.id === env.chave)
+  const k = (chaves.chaves || []).find(x => x && x.id === env.chave && x.uso !== 'pacote') // a chave dos pacotes (`uso: "pacote"`) só assina pacote, nunca o manifesto
   if (!k) return { erro: 'CHAVE-DESCONHECIDA' }
   const bytes = Buffer.from(env.manifesto, 'base64'), sig = Buffer.from(env.assinatura, 'base64')
   let ok = false
@@ -165,10 +172,34 @@ async function executar(op, ganchos = {}) {
     }
     if (vencido()) { log(`RECUSADO EXPIRADO ao terminar (venceu durante a aplicação); o serial ${m.serial} não foi registrado`); return { resultado: 'RECUSADO', detalhe: 'EXPIRADO', modulos: resultados, codigo: 0 } }
     if (!sigoDono()) { log('ERRO TRAVA-PERDIDA durante a aplicação; o estado não foi gravado (a próxima execução reconverge)'); dono = null; return { resultado: 'ERRO', detalhe: 'TRAVA-PERDIDA', codigo: 1 } }
-    gravarEstado(dir, { serial: m.serial, emitido: new Date(Math.max(Date.parse(m.emitido), Date.parse(estado.emitido || 0))).toISOString(), ultimoCiclo: new Date(relogio()).toISOString(), modulos: resultados })
-    const resumo = Object.entries(resultados).map(([k, v]) => `${k}=${v}`).join(' ')
+    const registro = { serial: m.serial, emitido: new Date(Math.max(Date.parse(m.emitido), Date.parse(estado.emitido || 0))).toISOString(), ultimoCiclo: new Date(relogio()).toISOString(), modulos: resultados }
+    gravarEstado(dir, registro) // a configuração fica registrada ANTES do pacote (que pode levar minutos): pacote lento ou com defeito nunca atrasa nem derruba o resto
+    const pacotes = {}, inicioPacotes = relogio() // o orçamento de tempo é UM por ciclo, de todos os pacotes juntos
+    const parar = () => (!sigoDono() ? 'TRAVA-PERDIDA' : vencido() ? 'EXPIRADO' : null)
+    const interrompido = motivo => { // mesmo tratamento dos módulos: a configuração já foi registrada, o resto não é aplicado e o motivo fica à vista
+      log(`RECUSADO ${motivo} durante o pacote; o que faltava não foi aplicado (a próxima execução reconverge)`)
+      if (motivo === 'TRAVA-PERDIDA') dono = null
+      else if (Object.keys(pacotes).length && sigoDono()) gravarEstado(dir, { ...registro, pacotes })
+      return { resultado: 'RECUSADO', detalhe: motivo, modulos: resultados, pacotes, codigo: 0 }
+    }
+    for (const pac of m.pacotes || []) {
+      const rotulo = pac && typeof pac.id === 'string' && ID.test(pac.id) ? pac.id : `entrada-${Object.keys(pacotes).length + 1}`
+      const problemas = Pacote.validar(pac, 'pacote')
+      if (problemas.length) { pacotes[rotulo] = 'PACOTE-RECUSADO'; falhou = true; log(`PACOTE ${rotulo} PACOTE-RECUSADO ${problemas.slice(0, 3).join('; ')}`); continue }
+      if (!(pac.alvos.includes('*') || (quem && pac.alvos.includes(quem)))) { pacotes[pac.id] = 'NAO-SE-APLICA'; continue }
+      if (pacotes[pac.id] !== undefined) { pacotes[`${pac.id}-repetido`] = 'PACOTE-RECUSADO'; falhou = true; log(`PACOTE ${pac.id} PACOTE-RECUSADO id repetido`); continue }
+      const antes = parar(); if (antes) return interrompido(antes)
+      renovarTrava()
+      const r = await Pacote.aplicar(pac, { dir, agora: relogio, log, parar, chaves, inicio: inicioPacotes, ganchos })
+      pacotes[pac.id] = r.palavra
+      if (Pacote.PALAVRAS_RUINS.has(r.palavra)) falhou = true
+      const depois = parar(); if (depois) return interrompido(depois)
+      renovarTrava()
+    }
+    if (Object.keys(pacotes).length && sigoDono()) gravarEstado(dir, { ...registro, pacotes }) // mesmo serial, mesmo nome de arquivo: a troca é atômica
+    const resumo = [...Object.entries(resultados), ...Object.entries(pacotes).map(([k, v]) => [`pacote-${k}`, v])].map(([k, v]) => `${k}=${v}`).join(' ')
     log(`${falhou ? 'COM-ERRO' : 'OK'} serial ${m.serial} ${resumo}`)
-    return { resultado: falhou ? 'COM-ERRO' : 'OK', serial: m.serial, modulos: resultados, codigo: falhou ? 1 : 0 }
+    return { resultado: falhou ? 'COM-ERRO' : 'OK', serial: m.serial, modulos: resultados, ...(Object.keys(pacotes).length ? { pacotes } : {}), codigo: falhou ? 1 : 0 }
   } catch (e) {
     try { log(`ERRO ${String(e.code || '')} ${String(e.message).split('\n')[0].slice(0, 160)}`) } catch (l) { process.stderr.write('ERRO e log indisponível\n') }
     return { resultado: 'ERRO', detalhe: String(e.code || e.message).slice(0, 80), codigo: 1 }
