@@ -26,5 +26,18 @@ try {
   fs.writeFileSync(arqPacotes, '{"x":1}'); assert.throws(() => renovar(op2, new Date('2027-02-03T00:00:00Z'), pem), /precisa ter/)
   const chavesDuas = JSON.parse(ler(pub)); chavesDuas.chaves.push({ id: 'pacote-teste', publica: chavesDuas.chaves[0].publica, uso: 'pacote' }); const pubDuas = path.join(raiz, 'duas.json'); fs.writeFileSync(pubDuas, JSON.stringify(chavesDuas)); fs.writeFileSync(arqPacotes, JSON.stringify({ pacotes: [] }))
   renovar({ ...op2, chave: pubDuas }, new Date('2027-02-04T00:00:00Z'), pem); assert.equal(JSON.parse(Buffer.from(JSON.parse(ler(saida2)).manifesto, 'base64')).serial, 202702040000); assert.equal(JSON.parse(ler(saida2)).chave, '2026-10') // assinou com a chave do manifesto, não com a última da lista (a dos pacotes)
-  console.log('ok - renovar: serial por data, validade de 120 dias, nunca recua, recusa chave errada e fonte inválida sem tocar no publicado, e não deixa a privada em disco')
+  // versões da extensão do Claude Code: copiadas de fonte/versoes.json para o campo de topo `versoes` (sem o arquivo, o manifesto é o de sempre); entrada ruim não publica nada e o publicado não é tocado
+  const versao = { id: 'claude-code', extensao: 'anthropic.claude-code', versao: '2.1.325', faixa: ['2.1.296', '2.1.325'], alvos: ['*'], hashes: { 'win32-x64': { 'extension.js': 'a'.repeat(64), 'claude.exe': 'b'.repeat(64) } }, seq: 202611161200, chave: 'pacote-teste', assinatura: 'A'.repeat(86) + '==' }
+  const arqVersoes = path.join(raiz, 'versoes.json'), saida3 = path.join(raiz, 'estado3.json'), op3 = { fonte, saida: saida3, chave: pub, pacotes: arqPacotes, versoes: arqVersoes }, aberto3 = () => abrirEnvelope(ler(saida3), JSON.parse(ler(pub))).manifesto
+  fs.writeFileSync(arqPacotes, JSON.stringify({ pacotes: [entrada] }))
+  assert.equal(renovar(op3, new Date('2027-03-01T00:00:00Z'), pem).versoes, 0); assert.equal(aberto3().versoes, undefined); assert.deepEqual(aberto3().pacotes, [entrada]) // sem o arquivo: nenhuma máquina muda de extensão
+  fs.writeFileSync(arqVersoes, JSON.stringify({ versoes: [] })); assert.equal(renovar(op3, new Date('2027-03-02T00:00:00Z'), pem).versoes, 0); assert.equal(aberto3().versoes, undefined) // lista vazia = o mesmo (o campo some)
+  fs.writeFileSync(arqVersoes, JSON.stringify({ versoes: [versao] })); const rv = renovar(op3, new Date('2027-03-03T00:00:00Z'), pem)
+  assert.deepEqual([rv.versoes, rv.pacotes, rv.modulos], [1, 1, JSON.parse(modulosReais).modulos.length]); assert.deepEqual(aberto3().versoes, [versao]); assert.deepEqual(aberto3().pacotes, [entrada]) // os dois campos de topo convivem; o `modulos` não muda
+  const publicado3 = ler(saida3)
+  for (const ruim of [{ ...versao, versao: '2.1.326' }, { ...versao, extensao: 'outra.extensao' }, { ...versao, assinatura: 'curta' }, { ...versao, hashes: {} }, 'x']) { fs.writeFileSync(arqVersoes, JSON.stringify({ versoes: [ruim] })); assert.throws(() => renovar(op3, new Date('2027-03-04T00:00:00Z'), pem), /inválido/); assert.equal(ler(saida3), publicado3) }
+  fs.writeFileSync(arqVersoes, JSON.stringify({ versoes: [versao, versao] })); assert.throws(() => renovar(op3, new Date('2027-03-04T00:00:00Z'), pem), /inválido/); assert.equal(ler(saida3), publicado3) // id repetido
+  fs.writeFileSync(arqVersoes, '{"x":1}'); assert.throws(() => renovar(op3, new Date('2027-03-04T00:00:00Z'), pem), /precisa ter/); assert.equal(ler(saida3), publicado3)
+  fs.writeFileSync(arqVersoes, '{ não é json'); assert.throws(() => renovar(op3, new Date('2027-03-04T00:00:00Z'), pem), /JSON/); assert.equal(ler(saida3), publicado3) // arquivo corrompido não vira "sem versões" em silêncio
+  console.log('ok - renovar: serial por data, validade de 120 dias, nunca recua, recusa chave errada e fonte inválida sem tocar no publicado, copia pacotes e versões da extensão (sem o arquivo o manifesto é o de sempre) e não deixa a privada em disco')
 } finally { fs.rmSync(raiz, { recursive: true, force: true }) }
