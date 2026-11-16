@@ -55,10 +55,10 @@ function validar(p, rotulo) { // lista de problemas (vazia = válido); a mensage
 
 // O texto que a chave dos pacotes assina: 8 linhas fixas, cada uma terminada em quebra de linha (o publicador monta o MESMO texto). Só `versao` fica de fora (é texto de log). `alvos` ENTRA: sem isso quem controla só o manifesto alargaria de ["piloto"] para ["*"] e mandaria o código a máquinas que a chave dos pacotes não autorizou.
 const payloadPacote = p => Buffer.from(['grupofacial-frota-pacote-v1', `id=${p.id}`, `alvos=${Array.isArray(p.alvos) ? p.alvos.join(',') : ''}`, `seq=${p.seq}`, `url=${p.url}`, `sha256=${p.sha256}`, `bytes=${p.bytes}`, `manifestoSha256=${p.manifestoSha256}`].join('\n') + '\n', 'utf8')
-function conferirAssinatura(p, chaves) { // null = confere; senão o motivo (sem repetir o valor recebido)
+function conferirAssinatura(p, chaves, payload = payloadPacote) { // null = confere; senão o motivo (sem repetir o valor recebido). `payload`: o texto assinado do contrato (a versão da extensão usa o dela, com a MESMA chave dos pacotes)
   const k = chaves && Array.isArray(chaves.chaves) ? chaves.chaves.find(x => x && x.id === p.chave && x.uso === 'pacote') : null
   if (!k) return 'chave dos pacotes desconhecida'
-  try { return crypto.verify(null, payloadPacote(p), crypto.createPublicKey({ key: Buffer.from(k.publica, 'base64'), format: 'der', type: 'spki' }), Buffer.from(p.assinatura, 'base64')) ? null : 'assinatura do pacote não confere' } catch (e) { return `chave dos pacotes inválida (${limpo(e.code || e.name)})` }
+  try { return crypto.verify(null, payload(p), crypto.createPublicKey({ key: Buffer.from(k.publica, 'base64'), format: 'der', type: 'spki' }), Buffer.from(p.assinatura, 'base64')) ? null : 'assinatura do pacote não confere' } catch (e) { return `chave dos pacotes inválida (${limpo(e.code || e.name)})` }
 }
 
 async function baixar(p, ganchos) { // devolve os bytes ou lança com .code; o teto é o tamanho DECLARADO (e assinado) do arquivo
@@ -104,20 +104,20 @@ function extrair(bytes, destino) {
   return { pasta: raiz, arquivos: nomes.length }
 }
 
-function executarPadrao(exe, args, { timeout, env, cwd }) {
-  const r = cp.spawnSync(exe, args, { env, cwd, timeout, encoding: 'utf8', windowsHide: true, maxBuffer: 4 * MIB, stdio: ['ignore', 'pipe', 'pipe'] })
+function executarPadrao(exe, args, { timeout, env, cwd, verbatim }) { // `verbatim`: o Windows não reescreve as aspas dos argumentos (o code.cmd só roda assim, por cmd.exe /d /s /c "…")
+  const r = cp.spawnSync(exe, args, { env, cwd, timeout, encoding: 'utf8', windowsHide: true, windowsVerbatimArguments: !!verbatim, maxBuffer: 4 * MIB, stdio: ['ignore', 'pipe', 'pipe'] })
   return { codigo: r.status, saida: r.stdout || '', erro: (r.stderr || '').slice(-300), estourou: !!(r.error && r.error.code === 'ETIMEDOUT'), spawnFalhou: r.error && r.error.code !== 'ETIMEDOUT' ? limpo(r.error.code || r.error.message) : null }
 }
 const ultimoJson = txt => { for (const l of String(txt).split('\n').map(x => x.trim()).reverse()) if (l.startsWith('{')) { try { return JSON.parse(l) } catch (e) { return null } } return null }
 
-function lerEstado(dir, aviso) { // arquivo ausente = vazio; ilegível = recomeça do zero, mas dizendo (não vira silêncio)
-  try { const r = JSON.parse(fs.readFileSync(path.join(dir, ARQ_ESTADO), 'utf8')); return obj(r) ? r : {} } catch (e) {
+function lerEstado(dir, aviso, arq = ARQ_ESTADO) { // arquivo ausente = vazio; ilegível = recomeça do zero, mas dizendo (não vira silêncio)
+  try { const r = JSON.parse(fs.readFileSync(path.join(dir, arq), 'utf8')); return obj(r) ? r : {} } catch (e) {
     if (e.code === 'ENOENT') return {}
-    aviso(`${ARQ_ESTADO} ilegível (${limpo(e.code || e.name)}); recomeçando do zero`); return {}
+    aviso(`${arq} ilegível (${limpo(e.code || e.name)}); recomeçando do zero`); return {}
   }
 }
-function gravarEstado(dir, rec) { // temporário na mesma pasta + fsync + rename: nunca um arquivo pela metade
-  const arq = path.join(dir, ARQ_ESTADO), tmp = `${arq}.${process.pid}.tmp`, fd = fs.openSync(tmp, 'w')
+function gravarEstado(dir, rec, nome = ARQ_ESTADO) { // temporário na mesma pasta + fsync + rename: nunca um arquivo pela metade
+  const arq = path.join(dir, nome), tmp = `${arq}.${process.pid}.tmp`, fd = fs.openSync(tmp, 'w')
   try { fs.writeSync(fd, JSON.stringify(rec, null, 2)); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
   fs.renameSync(tmp, arq)
   if (process.platform !== 'win32') { const d = fs.openSync(dir, 'r'); try { fs.fsyncSync(d) } finally { fs.closeSync(d) } }
@@ -263,4 +263,5 @@ async function religarPendentes(id, meu, guardar, ctx) {
   guardar({ religar: restantes })
 }
 
-module.exports = { validar, aplicar, extrair, urlValida, payloadPacote, conferirAssinatura, PALAVRAS_RUINS, LIM, NOME, ARQ_ESTADO, PAUSA }
+module.exports = { validar, aplicar, extrair, urlValida, payloadPacote, conferirAssinatura, PALAVRAS_RUINS, LIM, NOME, ARQ_ESTADO, PAUSA, // o resto é do que a versão da extensão (extensao-vscode.cjs) divide com o pacote: a mesma espera crescente, o mesmo executor e o mesmo estado em arquivo
+  ESPERAS_H, limpo, executarPadrao, kitCandidatos, lerEstado, gravarEstado }

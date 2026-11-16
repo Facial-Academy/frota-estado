@@ -8,18 +8,21 @@
 //   • módulos só dos tipos e chaves que ESTE cliente conhece (lista fixa abaixo): o manifesto não manda executar comando nenhum.
 //   • `pacotes` (campo de topo, opcional; ver pacote-mcp.cjs): o ÚNICO jeito de o manifesto entregar código, e só o pacote de MCPs do frota-estado, preso ao sha256 assinado.
 //     Fica FORA de `modulos` de propósito: um tipo novo dentro de `modulos` faria todo cliente já instalado recusar o manifesto inteiro (tipo desconhecido) e parar de aplicar até receber o cliente novo.
+//   • `versoes` (campo de topo, opcional; ver extensao-vscode.cjs): a versão da extensão `anthropic.claude-code` do VS Code (que embute o Claude Code), com a mesma assinatura da chave dos pacotes, a faixa testada e os hashes; só age com o VS Code fechado.
+//     Mesmo motivo para ficar fora de `modulos`: o cliente já instalado ignora o campo.
 // Falha de rede, manifesto inválido ou expirado = a máquina fica como está (exit 0, registrado no log). Só erro ao aplicar sai com código ≠ 0.
 const fs = require('fs'), path = require('path'), os = require('os'), crypto = require('crypto')
 const { aplicarChave } = require('./jsonc-config.cjs')
 const Trava = require('./trava.cjs')
 const Pacote = require('./pacote-mcp.cjs')
+const Versao = require('./extensao-vscode.cjs')
 
 const LIMITE_BYTES = 256 * 1024, TIMEOUT_MS = 20000, VALIDADE_MAX_DIAS = 400, LOG_MAX = 256 * 1024, JITTER_MAX_S = 300
 const TIPOS = { 'vscode-setting': { chave: /^claudeCode\.[A-Za-z0-9.]{1,80}$/ } }
 const ID = /^[a-z0-9][a-z0-9-]{0,39}$/
 
 const ehEscalar = v => v === null || ['boolean', 'number', 'string'].includes(typeof v)
-function validar(m, estrito = false) { // devolve a lista de problemas (vazia = válido); a mensagem nunca repete o valor recebido. `estrito` (assinador do operador): confere também cada entrada de `pacotes`
+function validar(m, estrito = false) { // devolve a lista de problemas (vazia = válido); a mensagem nunca repete o valor recebido. `estrito` (assinador do operador): confere também cada entrada de `pacotes` e de `versoes`
   const p = [], obj = x => x && typeof x === 'object' && !Array.isArray(x)
   if (!obj(m)) return ['o manifesto não é um objeto']
   if (m.formato !== 1) p.push('formato desconhecido')
@@ -42,6 +45,10 @@ function validar(m, estrito = false) { // devolve a lista de problemas (vazia = 
   if (m.pacotes !== undefined) {
     if (!Array.isArray(m.pacotes) || m.pacotes.length > 5) p.push('pacotes inválidos')
     else if (estrito) { const ids = new Set(); m.pacotes.forEach((x, i) => { p.push(...Pacote.validar(x, `pacote ${i + 1}`)); if (x && typeof x.id === 'string') { if (ids.has(x.id)) p.push(`pacote ${i + 1}: id repetido`); ids.add(x.id) } }) } // o cliente confere cada entrada na hora de aplicar: uma entrada ruim recusa só ela, nunca os `modulos`
+  }
+  if (m.versoes !== undefined) { // igual a `pacotes`: só a estrutura quebrada recusa o manifesto; entrada ruim recusa só ela
+    if (!Array.isArray(m.versoes) || m.versoes.length > 3) p.push('versões inválidas')
+    else if (estrito) { const ids = new Set(), exts = new Set(); m.versoes.forEach((x, i) => { p.push(...Versao.validar(x, `versão ${i + 1}`, true)); if (x && typeof x.id === 'string') { if (ids.has(x.id)) p.push(`versão ${i + 1}: id repetido`); ids.add(x.id) } if (x && typeof x.extensao === 'string') { if (exts.has(x.extensao)) p.push(`versão ${i + 1}: duas entradas para a mesma extensão (a máquina trocaria de versão duas vezes por ciclo)`); exts.add(x.extensao) } }) }
   }
   return p
 }
@@ -124,7 +131,7 @@ function lerJson(arq, padrao) { // arquivo ausente = padrão; arquivo corrompido
 
 // Uma convergência. Devolve { resultado, serial?, modulos?, detalhe?, codigo }. Nunca lança: o que der errado vira resultado registrado.
 async function executar(op, ganchos = {}) {
-  const dir = op.estado || estadoPadrao(), relogio = () => (ganchos.agora || Date.now)()
+  const dir = op.estado || estadoPadrao(), relogio = () => (ganchos.agora || Date.now)(), inicioCiclo = relogio() // o Agendador mata o cliente 40 min depois do início: a versão da extensão conta o orçamento a partir daqui, não do fim do pacote
   const log = (palavra, detalhe) => {
     const linha = `${new Date(relogio()).toISOString()} ${palavra}${detalhe ? ' ' + detalhe : ''}\n`, arq = path.join(dir, 'converge.log')
     try { if (fs.existsSync(arq) && fs.statSync(arq).size > LOG_MAX) fs.renameSync(arq, `${arq}.1`); fs.appendFileSync(arq, linha) } catch (e) { process.stderr.write(`FALHA-AO-GRAVAR-LOG ${String(e.code || e.message).slice(0, 80)}\n`) }
@@ -197,9 +204,39 @@ async function executar(op, ganchos = {}) {
       renovarTrava()
     }
     if (Object.keys(pacotes).length && sigoDono()) gravarEstado(dir, { ...registro, pacotes }) // mesmo serial, mesmo nome de arquivo: a troca é atômica
-    const resumo = [...Object.entries(resultados), ...Object.entries(pacotes).map(([k, v]) => [`pacote-${k}`, v])].map(([k, v]) => `${k}=${v}`).join(' ')
+    // a versão da extensão vem depois do pacote de MCPs e com o orçamento de tempo PRÓPRIO (a troca leva minutos e só age com o VS Code fechado); a configuração e os pacotes já estão registrados
+    const versoes = {}, extensoesVistas = new Set(), comPacotes = Object.keys(pacotes).length ? { pacotes } : {}
+    const interrompidoV = motivo => {
+      log(`RECUSADO ${motivo} durante a versão da extensão; o que faltava não foi aplicado (a próxima execução reconverge)`)
+      if (motivo === 'TRAVA-PERDIDA') dono = null
+      else if (Object.keys(versoes).length && sigoDono()) gravarEstado(dir, { ...registro, ...comPacotes, versoes })
+      return { resultado: 'RECUSADO', detalhe: motivo, modulos: resultados, ...comPacotes, versoes, codigo: 0 }
+    }
+    const antesRecuperar = parar(); if (antesRecuperar) return interrompidoV(antesRecuperar)
+    // troca que caiu no meio (marcador no estado local) é desfeita ANTES de qualquer entrada e MESMO sem entrada: removida do manifesto, fora dos alvos, `versoes` tirado do frota-estado ou forjada não deixam a máquina numa versão sem conferência
+    const recuperadas = await Versao.recuperar({ dir, agora: relogio, log, parar, chaves, inicio: inicioCiclo, ganchos })
+    for (const [id, palavra] of Object.entries(recuperadas)) { versoes[id] = palavra; if (Versao.PALAVRAS_RUINS.has(palavra)) falhou = true }
+    for (const ver of m.versoes || []) {
+      if (ver && typeof ver.id === 'string' && recuperadas[ver.id] !== undefined) continue // já tratado acima: neste ciclo a máquina só se recupera, a troca nova espera o próximo
+      const rotulo = ver && typeof ver.id === 'string' && ID.test(ver.id) ? ver.id : `entrada-${Object.keys(versoes).length + 1}`
+      const problemas = Versao.validar(ver, 'versão')
+      if (problemas.length) { versoes[rotulo] = 'VERSAO-RECUSADA'; falhou = true; log(`VERSAO ${rotulo} VERSAO-RECUSADA ${problemas.slice(0, 3).join('; ')}`); continue }
+      if (!(ver.alvos.includes('*') || (quem && ver.alvos.includes(quem)))) { versoes[ver.id] = 'NAO-SE-APLICA'; continue }
+      if (versoes[ver.id] !== undefined) { versoes[`${ver.id}-repetido`] = 'VERSAO-RECUSADA'; falhou = true; log(`VERSAO ${ver.id} VERSAO-RECUSADA id repetido`); continue }
+      if (extensoesVistas.has(ver.extensao)) { versoes[`${ver.id}-extensao-repetida`] = 'VERSAO-RECUSADA'; falhou = true; log(`VERSAO ${ver.id} VERSAO-RECUSADA já há outra entrada para a mesma extensão neste manifesto (valeria só a primeira)`); continue } // duas versões desejadas para a mesma extensão trocariam a máquina duas vezes a cada ciclo
+      extensoesVistas.add(ver.extensao)
+      const antes = parar(); if (antes) return interrompidoV(antes)
+      renovarTrava()
+      const r = await Versao.aplicar(ver, { dir, agora: relogio, log, parar, chaves, inicio: inicioCiclo, ganchos })
+      versoes[ver.id] = r.palavra
+      if (Versao.PALAVRAS_RUINS.has(r.palavra)) falhou = true
+      const depois = parar(); if (depois) return interrompidoV(depois)
+      renovarTrava()
+    }
+    if (Object.keys(versoes).length && sigoDono()) gravarEstado(dir, { ...registro, ...comPacotes, versoes })
+    const resumo = [...Object.entries(resultados), ...Object.entries(pacotes).map(([k, v]) => [`pacote-${k}`, v]), ...Object.entries(versoes).map(([k, v]) => [`versao-${k}`, v])].map(([k, v]) => `${k}=${v}`).join(' ')
     log(`${falhou ? 'COM-ERRO' : 'OK'} serial ${m.serial} ${resumo}`)
-    return { resultado: falhou ? 'COM-ERRO' : 'OK', serial: m.serial, modulos: resultados, ...(Object.keys(pacotes).length ? { pacotes } : {}), codigo: falhou ? 1 : 0 }
+    return { resultado: falhou ? 'COM-ERRO' : 'OK', serial: m.serial, modulos: resultados, ...comPacotes, ...(Object.keys(versoes).length ? { versoes } : {}), codigo: falhou ? 1 : 0 }
   } catch (e) {
     try { log(`ERRO ${String(e.code || '')} ${String(e.message).split('\n')[0].slice(0, 160)}`) } catch (l) { process.stderr.write('ERRO e log indisponível\n') }
     return { resultado: 'ERRO', detalhe: String(e.code || e.message).slice(0, 80), codigo: 1 }
