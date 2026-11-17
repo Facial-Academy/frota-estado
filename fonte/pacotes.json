@@ -5,14 +5,14 @@
       "alvos": [
         "*"
       ],
-      "url": "https://raw.githubusercontent.com/Facial-Academy/frota-estado/main/pacotes/pacote-frota-826413ea.json.gz",
-      "sha256": "826413ead7a99f53f8c8fa721d20aaf1946fea695378661e5ab8695aba390f50",
-      "bytes": 385428,
-      "manifestoSha256": "5d6e3ee539f556b552456f467b8579483d6b69680ab7ac2d2972e202f2a2fd46",
-      "versao": "nexo 2.20.0+8ff929bf · gdrive 0.7.0+9ddb20f5",
-      "seq": 202611131857,
+      "url": "https://raw.githubusercontent.com/Facial-Academy/frota-estado/main/pacotes/pacote-frota-0e036a07.json.gz",
+      "sha256": "0e036a0792912b1940b1a5df846acbaab9a38ac5bdd18f0aa52408b5280f02e6",
+      "bytes": 404740,
+      "manifestoSha256": "c41ab598aa665c673eac551935232bb452cd9c97865f724b3de42688fc65023d",
+      "versao": "nexo 2.21.1+1a8fbb88 · gdrive 0.7.0+9ddb20f5",
+      "seq": 202611172044,
       "chave": "pacote-2026-11",
-      "assinatura": "vfuurHJp/59vuZaKjw76IPQZ7NOkdKuk779CZWTayqZhnG9VnND+83Zvc07nAzEHio0IB14sg0RcoEBst0HpBA=="
+      "assinatura": "UlKONy14wFN+hmwr/2H6wRKNk7mgxtbio4L1mgsAuwoa8lx/G0TwOgxWkxhwnoKmOs8S9zm/w8WpoeLRd3fJAA=="
     }
   ]
 }
